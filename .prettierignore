@@ -1,0 +1,4 @@
+# 如果不使用此文件实现目录排除，可以使用 .oxfmtrc.json 中的 "ignorePatterns": ["references/**"]
+# 但如果参考目录有完整项目（带有嵌套的 .prettierrc/.oxfmtrc.json）则目录忽略会失效，除非在 oxfmt 命令加 --disable-nested-config 参数；
+
+references/

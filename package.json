@@ -1,19 +1,34 @@
 {
-	"name": "odd-grass-2db7",
-	"version": "0.0.0",
-	"private": true,
-	"scripts": {
-		"deploy": "wrangler deploy",
-		"dev": "wrangler dev",
-		"start": "wrangler dev",
-		"test": "vitest",
-		"cf-typegen": "wrangler types"
-	},
-	"devDependencies": {
-		"@cloudflare/vitest-pool-workers": "^0.12.4",
-		"@types/node": "^25.3.3",
-		"typescript": "^5.5.2",
-		"vitest": "~3.2.0",
-		"wrangler": "^4.70.0"
-	}
+  "name": "OmniBot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cloudflare Workers Template",
+  "keywords": [
+    "cloudflare",
+    "workers"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "types": "wrangler types env.d.ts --include-runtime false",
+    "format": "oxfmt --write .",
+    "lint": "oxlint src/",
+    "check": "oxfmt --check . && oxlint src/ && tsc"
+  },
+  "dependencies": {
+    "agents": "^0.16.2",
+    "elysia": "^1.4.28",
+    "jose": "^6.2.3"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260429.1",
+    "@types/node": "^26.0.0",
+    "jsonc-parser": "^3.3.1",
+    "oxfmt": "^0.55.0",
+    "oxlint": "^1.62.0",
+    "typescript": "^6.0.3",
+    "wrangler": "^4.86.0"
+  }
 }

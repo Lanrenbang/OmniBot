@@ -15,7 +15,12 @@
     "types": "wrangler types env.d.ts --include-runtime false",
     "format": "oxfmt --write .",
     "lint": "oxlint src/",
-    "check": "oxfmt --check . && oxlint src/ && tsc"
+    "check": "oxfmt --check . && oxlint src/ && tsc",
+    "channel:add": "bun run scripts/channel-manager.ts add",
+    "channel:remove": "bun run scripts/channel-manager.ts remove",
+    "channel:sync": "bun run scripts/channel-manager.ts sync",
+    "predeploy": "bun run channel:sync",
+    "predev": "bun run channel:sync"
   },
   "dependencies": {
     "agents": "^0.16.2",

@@ -21,6 +21,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   let countdownInterval = null;
   let currentLogSpan = null;
   let lastMessage = "";
+  let verifyCodeSubmitted = false;
 
   const expiredCountdownEl = document.getElementById("expired-countdown");
 
@@ -225,7 +226,12 @@ document.addEventListener("DOMContentLoaded", async () => {
       } else {
         stopDotAnimation();
 
-        if (message !== lastMessage) {
+        // 当状态从 need_verifycode 切换为其他状态时，重置配对码提交标记
+        if (lastMessage !== message && status !== "need_verifycode") {
+          verifyCodeSubmitted = false;
+        }
+
+        if (message !== lastMessage || status === "need_verifycode") {
           lastMessage = message;
 
           if (status === "confirmed" || status === "binded_redirect") {
@@ -251,11 +257,27 @@ document.addEventListener("DOMContentLoaded", async () => {
             return;
           } else if (status === "need_verifycode") {
             updateStatusUI("need_verifycode");
-            appendLog(message, true);
-            verifyCodeSection.classList.remove("hidden");
-            polling = false;
-            return;
+            if (verifyCodeSubmitted) {
+              if (data.hasPendingVerifyCode) {
+                // 配对码已提交，等待 pollStatus DO 循环处理中
+                appendLog("配对码已提交，正在等待验证...", true);
+              } else {
+                // 配对码已提交但 DB 中已清除（DO 已处理并判定为错误）
+                // 重置标记，允许用户重新输入
+                verifyCodeSubmitted = false;
+                appendLog("配对码错误，请重新输入", false, true);
+                verifyCodeSection.classList.remove("hidden");
+                polling = false;
+                return;
+              }
+            } else {
+              appendLog(message, true);
+              verifyCodeSection.classList.remove("hidden");
+              polling = false;
+              return;
+            }
           } else if (status === "verify_code_blocked") {
+            verifyCodeSubmitted = false;
             updateStatusUI("verify_code_blocked");
             appendLog(message, true, true);
             appendLog("请点击刷新按钮重新获取二维码");
@@ -300,9 +322,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       verifyCodeSection.classList.add("hidden");
       verifyCodeInput.value = "";
-      appendLog("配对码已提交，等待验证...");
+      verifyCodeSubmitted = true;
+      appendLog("配对码已提交，正在等待验证...");
 
-      // Resume polling with verify_code parameter
+      // Resume polling — 前端看到 need_verifycode 时根据 verifyCodeSubmitted
+      // 和 hasPendingVerifyCode 区分"等待验证"和"验证失败"
       polling = false;
       pollStatus();
     } catch (e) {
@@ -320,6 +344,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     qrcode = "";
     polling = false;
     lastMessage = "";
+    verifyCodeSubmitted = false;
     qrEl.innerHTML = "";
     logContainer.innerHTML = "";
     init();

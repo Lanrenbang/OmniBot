@@ -11,6 +11,12 @@ import { readdirSync, existsSync, readFileSync, writeFileSync } from "fs";
 import { join, resolve } from "path";
 import { execSync } from "child_process";
 import { parse as parseJSONC, modify as modifyJSONC, applyEdits, type ModificationOptions } from "jsonc-parser";
+import {
+  createSourceFile,
+  ScriptTarget,
+  SyntaxKind,
+  forEachChild
+} from "typescript";
 
 // ─── 类型定义 ───────────────────────────────────────────────────────────
 
@@ -29,10 +35,6 @@ interface ChannelWrangler {
   }>;
   kv_namespaces?: Array<{ binding: string; id: string }>;
   vars?: Record<string, string | number | boolean>;
-}
-
-interface ChannelModule {
-  default: { id: string; wrangler?: ChannelWrangler };
 }
 
 // ─── 常量 ───────────────────────────────────────────────────────────────
@@ -111,22 +113,51 @@ function generateNextMigrationTag(existingMigrations: any[], channelName: string
 }
 
 /**
- * 加载 channel 的 wrangler 配置。
+ * 从 channel/index.ts 中用 TypeScript AST 静态提取 wrangler 配置。
  *
- * 读取策略（按优先级）：
- *   1. wrangler.json（推荐）— 脚本环境友好，无运行时依赖
- *   2. index.ts 的 defineWrangler()（备用）— 需要解析 TypeScript
+ * ── 演化历史 ──
  *
- * 方案 1 优先，因为 index.ts 中可能引用 cloudflare:workers 等仅在
- * Workers 运行时可用的模块，导致脚本环境的动态 import 失败。
+ * Phase 1（原始 - 已废弃）：
+ *   尝试用 Node.js 动态 import() 加载 index.ts，通过 mod.default.wrangler 读取。
+ *   ❌ 失败原因：index.ts 中引用了 cloudflare:workers 等仅在 Workers 运行时
+ *      存在的模块，脚本环境（Node.js / Bun）无法解析，import() 永远抛异常。
+ *
+ * Phase 2（权宜之计 - 已淘汰）：
+ *   在 channel 目录下放独立的 wrangler.json 文件，channel-manager 读取之。
+ *   ✅ 工作，但配置被割裂为 index.ts + wrangler.json 两份文件，
+ *   ❌ 失去了 defineChannel() 的类型检查保障，且新增 channel 时容易遗漏。
+ *
+ * Phase 3（当前 - 最终方案）：
+ *   用 TypeScript 编译器 API 将 index.ts 作为 AST 数据文件解析，
+ *   不执行任何模块导入，纯 AST 级别提取 wrangler 字段的静态对象字面量。
+ *   ✅ 不依赖运行时环境，无视所有 import 语句
+ *   ✅ 配置集中在一处 index.ts，保留完整类型检查
+ *   ✅ 零运行时依赖（typescript 包仅构建时使用）
+ *
+ * 仍保留 wrangler.json 作为低优先级兼容回退，供未迁移的旧 channel 使用。
+ *
+ * @param name channel 目录名
+ * @returns ChannelWrangler | null
  */
 async function loadChannelWrangler(name: string): Promise<ChannelWrangler | null> {
   const channelDir = join(CHANNEL_DIR, name);
   if (!existsSync(channelDir)) return null;
 
-  // 优先读取 wrangler.json 文件
+  // ── 方案 1（优先）：AST 提取 ──
+  const indexPath = join(channelDir, "index.ts");
+  if (existsSync(indexPath)) {
+    const source = readFileSync(indexPath, "utf-8");
+    const result = extractWranglerAST(source);
+    if (result) return result;
+  }
+
+  // ── 方案 2（回退）：legacy wrangler.json ──
   const jsonPath = join(channelDir, "wrangler.json");
   if (existsSync(jsonPath)) {
+    console.warn(
+      `  ⚠️  channel "${name}" 正在使用 wrangler.json（已弃用）\n` +
+        `     请将 wrangler 配置迁移到 index.ts 的 defineChannel() 中`
+    );
     try {
       return JSON.parse(readFileSync(jsonPath, "utf-8"));
     } catch {
@@ -134,15 +165,101 @@ async function loadChannelWrangler(name: string): Promise<ChannelWrangler | null
     }
   }
 
-  // 备用：尝试动态 import（可能在脚本环境中因 cloudflare:workers 等模块失败）
-  const indexPath = join(channelDir, "index.ts");
-  if (!existsSync(indexPath)) return null;
-  try {
-    const mod: ChannelModule = await import(indexPath);
-    return mod.default.wrangler ?? null;
-  } catch {
-    return null;
+  return null;
+}
+
+/**
+ * 用 TypeScript 编译器 API 从 index.ts 源码中静态提取 wrangler 配置。
+ *
+ * 工作原理：
+ *   1. createSourceFile() 将源码解析为 AST（不解析类型，不执行代码）
+ *   2. 遍历 AST，找到 export default defineChannel({...}) 调用
+ *   3. 提取 wrangler 属性对应的对象字面量表达式
+ *   4. 递归将静态 AST 节点（StringLiteral / ObjectLiteral / ArrayLiteral 等）估值回 JSON
+ *
+ * 支持的对象值类型：
+ *   - 字符串、数字、布尔值
+ *   - 嵌套对象、数组
+ *   - CallExpression 自动解包（如 defineWrangler({...}) → 取其第一个参数）
+ *
+ * 不支持的扩展（目前 wrangler 配置无需）：
+ *   - 模板字符串（TemplateExpression）
+ *   - 变量引用（Identifier）
+ *   - 条件表达式
+ */
+function extractWranglerAST(source: string): ChannelWrangler | null {
+  const sf = createSourceFile("index.ts", source, ScriptTarget.Latest, true);
+  let wranglerConfig: ChannelWrangler | null = null;
+
+  /** 递归将 TypeScript AST 节点估值为 JSON 兼容值 */
+  function evalExpr(node: any): any {
+    switch (node.kind) {
+      case SyntaxKind.StringLiteral:
+        return node.text;
+
+      case SyntaxKind.NumericLiteral:
+        return Number(node.text);
+
+      case SyntaxKind.TrueKeyword:
+        return true;
+      case SyntaxKind.FalseKeyword:
+        return false;
+      case SyntaxKind.NullKeyword:
+        return null;
+
+      case SyntaxKind.ObjectLiteralExpression: {
+        const obj: Record<string, any> = {};
+        for (const prop of node.properties) {
+          if (prop.kind === SyntaxKind.PropertyAssignment) {
+            obj[prop.name.text] = evalExpr(prop.initializer);
+          }
+        }
+        return obj;
+      }
+
+      case SyntaxKind.ArrayLiteralExpression:
+        return node.elements.map(evalExpr);
+
+      // CallExpression 包装器自动解包（e.g. defineWrangler({...})）
+      case SyntaxKind.CallExpression:
+        if (node.arguments.length === 1) {
+          return evalExpr(node.arguments[0]);
+        }
+        return undefined;
+
+      default:
+        console.warn(`  ⚠️  [AST] 跳过不支持的节点类型: ${SyntaxKind[node.kind]} (行 ${sf.getLineAndCharacterOfPosition(node.pos).line + 1})`);
+        return undefined;
+    }
   }
+
+  /** 遍历 AST 查找 export default defineChannel({...}) */
+  function visit(node: any) {
+    if (node.kind === SyntaxKind.ExportAssignment) {
+      const expr = node.expression;
+
+      // 匹配 export default defineChannel({...})
+      if (
+        expr?.kind === SyntaxKind.CallExpression &&
+        expr?.expression?.text === "defineChannel" &&
+        expr?.arguments?.length >= 1
+      ) {
+        const configObj = expr.arguments[0];
+        if (configObj?.kind === SyntaxKind.ObjectLiteralExpression) {
+          for (const prop of configObj.properties) {
+            if (prop.name?.text === "wrangler") {
+              wranglerConfig = evalExpr(prop.initializer) as ChannelWrangler | null;
+              return; // 找到即停止
+            }
+          }
+        }
+      }
+    }
+    forEachChild(node, visit);
+  }
+
+  visit(sf);
+  return wranglerConfig;
 }
 
 function scanChannels(): string[] {

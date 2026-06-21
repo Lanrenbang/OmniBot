@@ -4,6 +4,9 @@ const ILINK_APP_ID = "bot";
 export const DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com";
 export const CDN_BASE_URL = "https://novac2c.cdn.weixin.qq.com/c2c";
 
+/** 默认 bot_agent，可被 ILINK_BOT_AGENT 环境变量覆盖 */
+export const DEFAULT_BOT_AGENT = "OmniBot/1.0.0";
+
 export function generateUin(): string {
   const buf = new Uint8Array(4);
   crypto.getRandomValues(buf);
@@ -34,5 +37,21 @@ export function authHeaders(token: string, uin: string): Record<string, string> 
     "X-WECHAT-UIN": uin,
     AuthorizationType: "ilink_bot_token",
     Authorization: `Bearer ${token}`
+  };
+}
+
+/**
+ * 构建每个 POST 请求必须附加的 base_info 对象。
+ *
+ * 包含：
+ * - channel_version: 当前 iLink 通道版本号（来自 ILINK_CHANNEL_VERSION）
+ * - bot_agent:       UA 风格的自声明标识（来自 ILINK_BOT_AGENT，默认 OmniBot/1.0.0）
+ *
+ * 参考上游 openclaw-weixin/src/api/api.ts buildBaseInfo()
+ */
+export function buildBaseInfo(): Record<string, string> {
+  return {
+    channel_version: env.ILINK_CHANNEL_VERSION ?? "2.1.6",
+    bot_agent: env.ILINK_BOT_AGENT ?? DEFAULT_BOT_AGENT,
   };
 }

@@ -1,6 +1,6 @@
 import { Agent, callable, getAgentByName } from "agents";
 import { MessageType } from "./types";
-import { authHeaders } from "./api";
+import { authHeaders, buildBaseInfo } from "./api";
 
 interface AccountInfo {
   ilink_bot_id: string;
@@ -125,7 +125,7 @@ export class WeChatBotAgent extends Agent<Env> {
         headers: authHeaders(account.bot_token, account.wechat_uin),
         body: JSON.stringify({
           get_updates_buf: account.updates_buf,
-          base_info: { channel_version: "2.1.6" }
+          base_info: buildBaseInfo()
         }),
         signal: AbortSignal.timeout(40_000)
       });
@@ -295,7 +295,7 @@ export class WeChatBotAgent extends Agent<Env> {
           context_token: contextToken,
           item_list: [{ type: 1, text_item: { text: payload.text } }]
         },
-        base_info: { channel_version: "2.1.6" }
+        base_info: buildBaseInfo()
       })
     });
   }
@@ -308,6 +308,19 @@ export class WeChatBotAgent extends Agent<Env> {
 
   private extractText(msg: { item_list?: { type: number; text_item?: { text: string } }[] }): string | undefined {
     return msg.item_list?.find((i) => i.type === 1)?.text_item?.text;
+  }
+
+  /**
+   * 返回最近 N 个已登录账号的 bot_token 列表。
+   * 供 QRCodeAgent 获取二维码时上报 local_token_list，实现 binded_redirect 加速。
+   * 参考上游 openclaw-weixin/src/auth/login-qr.ts getLocalBotTokenList()
+   */
+  @callable()
+  async getRecentTokens(count: number = 10): Promise<string[]> {
+    const rows = this.sql<{ bot_token: string }>`
+      SELECT bot_token FROM accounts ORDER BY connected_at DESC LIMIT ${count}
+    `;
+    return rows.map((r) => r.bot_token).filter(Boolean);
   }
 
   @callable()

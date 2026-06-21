@@ -24,7 +24,8 @@ export default defineChannel({
       }
     ],
     vars: {
-      ILINK_CHANNEL_VERSION: "2.1.6"
+      ILINK_CHANNEL_VERSION: "2.4.3",
+      ILINK_BOT_AGENT: "OmniBot/1.0.0"
     }
   }),
 

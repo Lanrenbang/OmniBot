@@ -7,3 +7,7 @@ import wechat from "./wechat/index";
 export const channels = [
   wechat,
 ];
+// ─── Agent/DO 类导出（供 wrangler 发现 DO） ──────────
+export { WeChatBotAgent } from "./wechat/bot-agent";
+export { WeChatQRCodeAgent } from "./wechat/qr-agent";
+

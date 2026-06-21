@@ -41,13 +41,11 @@ export class ChannelManager {
   async initChannels(env: Env): Promise<void> {
     if (this.initialized) return;
 
-    for (const [id, channel] of this.channels) {
+    for (const [_id, channel] of this.channels) {
       if (channel.init) {
         const result = await channel.init(env);
         if (!result.available) {
-          console.warn(
-            `[${channel.id}] 初始化失败（可能未配置凭证），该 channel 功能不可用`,
-          );
+          console.warn(`[${channel.id}] 初始化失败（可能未配置凭证），该 channel 功能不可用`);
         }
       }
     }

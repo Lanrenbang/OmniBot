@@ -10,12 +10,7 @@
 import { readdirSync, existsSync, readFileSync, writeFileSync } from "fs";
 import { join, resolve } from "path";
 import { execSync } from "child_process";
-import {
-  parse as parseJSONC,
-  modify as modifyJSONC,
-  applyEdits,
-  type ModificationOptions,
-} from "jsonc-parser";
+import { parse as parseJSONC, modify as modifyJSONC, applyEdits, type ModificationOptions } from "jsonc-parser";
 
 // ─── 类型定义 ───────────────────────────────────────────────────────────
 
@@ -51,8 +46,8 @@ const JSONC_OPTS: ModificationOptions = {
   formattingOptions: {
     insertSpaces: true,
     tabSize: 2,
-    eol: "\n",
-  },
+    eol: "\n"
+  }
 };
 
 // ─── JSONC 读写 ─────────────────────────────────────────────────────────
@@ -88,11 +83,7 @@ function removeArray<T>(target: T[], source: T[], key: keyof T): T[] {
   return target.filter((item) => !removeKeys.has(String(item[key])));
 }
 
-function checkMigrationConflict(
-  existingMigrations: any[],
-  newMigrations: any[],
-  channelName: string,
-): void {
+function checkMigrationConflict(existingMigrations: any[], newMigrations: any[], channelName: string): void {
   for (const newMig of newMigrations) {
     const conflict = existingMigrations.find((m: any) => m.tag === newMig.tag);
     if (conflict) {
@@ -100,17 +91,14 @@ function checkMigrationConflict(
         `❌ Migration tag "${newMig.tag}" 冲突！\n` +
           `   channel "${channelName}" 使用的 migration tag 与现有配置重复。\n` +
           `   请为 channel "${channelName}" 使用独特的前缀，如 "${channelName}-v1"。\n` +
-          `   如需强制覆盖，请手动编辑 wrangler.jsonc 后重试。`,
+          `   如需强制覆盖，请手动编辑 wrangler.jsonc 后重试。`
       );
       process.exit(1);
     }
   }
 }
 
-function generateNextMigrationTag(
-  existingMigrations: any[],
-  channelName: string,
-): string {
+function generateNextMigrationTag(existingMigrations: any[], channelName: string): string {
   let maxNum = 0;
   for (const m of existingMigrations) {
     const match = m.tag?.match(/v(\d+)/);
@@ -122,8 +110,32 @@ function generateNextMigrationTag(
   return `v${maxNum + 1}-remove-${channelName}`;
 }
 
+/**
+ * 加载 channel 的 wrangler 配置。
+ *
+ * 读取策略（按优先级）：
+ *   1. wrangler.json（推荐）— 脚本环境友好，无运行时依赖
+ *   2. index.ts 的 defineWrangler()（备用）— 需要解析 TypeScript
+ *
+ * 方案 1 优先，因为 index.ts 中可能引用 cloudflare:workers 等仅在
+ * Workers 运行时可用的模块，导致脚本环境的动态 import 失败。
+ */
 async function loadChannelWrangler(name: string): Promise<ChannelWrangler | null> {
-  const indexPath = join(CHANNEL_DIR, name, "index.ts");
+  const channelDir = join(CHANNEL_DIR, name);
+  if (!existsSync(channelDir)) return null;
+
+  // 优先读取 wrangler.json 文件
+  const jsonPath = join(channelDir, "wrangler.json");
+  if (existsSync(jsonPath)) {
+    try {
+      return JSON.parse(readFileSync(jsonPath, "utf-8"));
+    } catch {
+      return null;
+    }
+  }
+
+  // 备用：尝试动态 import（可能在脚本环境中因 cloudflare:workers 等模块失败）
+  const indexPath = join(channelDir, "index.ts");
   if (!existsSync(indexPath)) return null;
   try {
     const mod: ChannelModule = await import(indexPath);
@@ -136,18 +148,16 @@ async function loadChannelWrangler(name: string): Promise<ChannelWrangler | null
 function scanChannels(): string[] {
   if (!existsSync(CHANNEL_DIR)) return [];
   return readdirSync(CHANNEL_DIR, { withFileTypes: true })
-    .filter(
-      (d) =>
-        d.isDirectory() && existsSync(join(CHANNEL_DIR, d.name, "index.ts")),
-    )
+    .filter((d) => d.isDirectory() && existsSync(join(CHANNEL_DIR, d.name, "index.ts")))
     .map((d) => d.name);
 }
 
 function toKebabCase(pascal: string): string {
+  // Handle consecutive uppercase (e.g. "QRCode" → "QR-Code" → "qr-code")
   return pascal
-    .replace(/([A-Z])/g, "-$1")
-    .toLowerCase()
-    .replace(/^-/, "");
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1-$2")
+    .replace(/([a-z])([A-Z])/g, "$1-$2")
+    .toLowerCase();
 }
 
 /**
@@ -160,9 +170,7 @@ async function generateChannelIndex(): Promise<void> {
     // CHANNEL_DIR 已存在，不处理
   }
 
-  const imports = channelNames
-    .map((name) => `import ${name} from "./${name}/index";`)
-    .join("\n");
+  const imports = channelNames.map((name) => `import ${name} from "./${name}/index";`).join("\n");
 
   const channelsExport =
     channelNames.length > 0
@@ -170,23 +178,32 @@ async function generateChannelIndex(): Promise<void> {
       : "export const channels: any[] = [];";
 
   // Agent/DO 导出
+  //
+  // ⚠️ 不使用动态 import()（会因 cloudflare:workers 等运行时模块无法在脚本环境解析而失败）。
+  // 改为直接从 channel 的 index.ts 源码中扫描 `export { ClassName } from "./path"` 语句。
+  // 每个 channel 应在其 index.ts 中显式 re-export 所有 Agent/DO 类。
+  //
+  // 例如 wechat/index.ts 中应有：
+  //   export { WeChatBotAgent } from "./bot-agent";
+  //   export { WeChatQRCodeAgent } from "./qr-agent";
   const agentExports: string[] = [];
+  const agentExportRegex = /export\s*\{\s*([^}]+)\s*\}\s*from\s*["']([^"']+)["']/g;
   for (const name of channelNames) {
     const indexPath = join(CHANNEL_DIR, name, "index.ts");
     if (!existsSync(indexPath)) continue;
-    try {
-      const mod: ChannelModule = await import(indexPath);
-      const w = mod.default?.wrangler;
-      if (w?.durable_objects?.bindings) {
-        for (const binding of w.durable_objects.bindings) {
-          const importPath = `./${name}/${toKebabCase(binding.class_name)}`;
-          agentExports.push(
-            `export { ${binding.class_name} } from "${importPath}";`,
-          );
+
+    const source = readFileSync(indexPath, "utf-8");
+    let match: RegExpExecArray | null;
+    while ((match = agentExportRegex.exec(source)) !== null) {
+      const identifiers = match[1]!.split(",").map((s: string) => s.trim());
+      const importPath = match[2]!;
+      // Only include exports that look like Agent/DO classes (PascalCase)
+      const normalizedPath = importPath.startsWith("./") ? importPath.slice(2) : importPath;
+      for (const id of identifiers) {
+        if (/^[A-Z]/.test(id)) {
+          agentExports.push(`export { ${id} } from "./${name}/${normalizedPath}";`);
         }
       }
-    } catch {
-      // 静默跳过
     }
   }
 
@@ -206,7 +223,7 @@ ${channelsExport}${agentExportBlock}
 
   writeFileSync(CHANNEL_INDEX_PATH, content, "utf-8");
   console.log(
-    `✅ src/channel/index.ts 已生成（${channelNames.length} 个 channel，${agentExports.length} 个 Agent 导出）`,
+    `✅ src/channel/index.ts 已生成（${channelNames.length} 个 channel，${agentExports.length} 个 Agent 导出）`
   );
 }
 
@@ -286,13 +303,9 @@ async function removeChannel(name: string) {
 
   let removedBindings: Array<{ name: string; class_name: string }> = [];
   if (w.durable_objects?.bindings && config.durable_objects?.bindings) {
-    const remaining = removeArray(
-      config.durable_objects.bindings,
-      w.durable_objects.bindings,
-      "name",
-    );
+    const remaining = removeArray(config.durable_objects.bindings, w.durable_objects.bindings, "name");
     removedBindings = config.durable_objects.bindings.filter(
-      (b: any) => !remaining.find((r: any) => r.name === b.name),
+      (b: any) => !remaining.find((r: any) => r.name === b.name)
     );
 
     if (remaining.length > 0) {
@@ -314,7 +327,7 @@ async function removeChannel(name: string) {
       `\n⚠️  正在为 channel "${name}" 生成 DO 删除迁移\n` +
         `  Migration tag: ${tag}\n` +
         `  被删除的 class: ${deletedClassNames.join(", ")}\n` +
-        `  部署后将永久删除上述 class 的所有 DO 实例及其持久化数据！\n`,
+        `  部署后将永久删除上述 class 的所有 DO 实例及其持久化数据！\n`
     );
   }
 
@@ -357,6 +370,17 @@ async function removeChannel(name: string) {
 
 // ─── syncWrangler ───────────────────────────────────────────────────────
 
+// Framework-level bindings that are manually maintained and should NOT
+// be removed by channel:sync (e.g. IDENTITY_MAPPER, framework core DOs)
+const FRAMEWORK_DO_BINDINGS: Array<{ name: string; class_name: string }> = [
+  { name: "IDENTITY_MAPPER", class_name: "IdentityMapper" }
+];
+
+const FRAMEWORK_MIGRATIONS: Array<{
+  tag: string;
+  new_sqlite_classes?: string[];
+}> = [{ tag: "v1-identity-mapper", new_sqlite_classes: ["IdentityMapper"] }];
+
 async function syncWrangler() {
   const channels = scanChannels();
   let text = readRawWrangler();
@@ -375,6 +399,10 @@ async function syncWrangler() {
   }> = [];
   const allKV: Array<{ binding: string; id: string }> = [];
   const allVars: Record<string, any> = {};
+
+  // Start with framework-level bindings, then merge channel bindings on top
+  mergeArray(allBindings, FRAMEWORK_DO_BINDINGS, "name");
+  mergeArray(allMigrations, FRAMEWORK_MIGRATIONS, "tag");
 
   for (const name of channels) {
     const w = await loadChannelWrangler(name);
@@ -428,9 +456,7 @@ async function syncWrangler() {
   }
 
   writeFileSync(WRANGLER_PATH, text, "utf-8");
-  console.log(
-    `✅ wrangler.jsonc 全量重建完成（${channels.length} 个 channel）`,
-  );
+  console.log(`✅ wrangler.jsonc 全量重建完成（${channels.length} 个 channel）`);
 
   await generateChannelIndex();
   regenerateTypes();

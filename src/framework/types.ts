@@ -1,7 +1,7 @@
 /**
  * 框架核心类型定义
  *
- * 遵循开发计划 3.1 节定义。
+ * 遵循开发计划 §3.1 和 §7.2-7.3 定义。
  * IMChannel, NormalizedMessage, SendPayload, ChannelWranglerConfig 等核心类型。
  */
 
@@ -9,11 +9,6 @@ import type { Elysia } from "elysia";
 
 /** Channel 定义的 wrangler.jsonc 配置片段（仅构建时预处理，非运行时期） */
 export interface ChannelWranglerConfig {
-  /**
-   * Agent / AIChatAgent / DO 的绑定声明。
-   * Agent 和 AIChatAgent 均继承自 DurableObject，在 wrangler.jsonc 中声明方式与原生 DO 完全相同：
-   * 使用 durable_objects.bindings + migrations.new_sqlite_classes。
-   */
   durable_objects?: {
     bindings: Array<{
       name: string;
@@ -50,7 +45,6 @@ export interface IMChannel {
   /**
    * 路由注册（被动收信通道）
    * 返回一个 Elysia 实例或 (app) => app 的函数
-   * 纯路由 channel 可实现完全自动发现
    */
   routes?: ((app: Elysia) => Elysia) | Elysia;
 
@@ -62,38 +56,36 @@ export interface IMChannel {
 
   /**
    * Channel 初始化（在 worker 启动时调用）
-   * 可在此检测 env 中的 binding 是否就绪
    */
   init?(env: Env): Promise<{ available: boolean }>;
 
   /**
    * 统一发送消息接口
    * 各 channel 实现自己的发送逻辑
+   * @param msg.rawPlatformUserId - 收件人平台 ID（由 IdentityMapper.reverse 或 Router 提供）
    */
   sendMessage(env: Env, msg: SendPayload): Promise<SendResult>;
 }
 
-/** 标准化消息格式 */
+/** 标准化消息格式（入站） */
 export interface NormalizedMessage {
   channelId: string;
   messageId: string;
 
-  // ── 平台原始 ID（Channel normalize 时填充，Router 用于 IdentityMapper 解析） ──
+  // ── 平台原始 ID（Channel normalize 时填充） ──
   /**
    * 平台原始用户 ID（如微信 wxid、飞书 open_id/user_id）
-   * Channel 的 normalize() 必须填充此字段，Router 通过 IdentityMapper.resolve()
-   * 将其解析为 internalUserId
+   * Channel 的 normalize() 必须填充此字段
    */
   rawPlatformUserId: string;
-  /**
-   * 平台原始聊天/群组 ID（如微信 chatroom_id、飞书 chat_id）
-   * 单聊时与 rawPlatformUserId 相同，群聊时为群 ID
-   */
+  /** 平台原始聊天/群组 ID（单聊时与 rawPlatformUserId 相同） */
   rawPlatformChatId?: string;
 
-  // ── 统一内部 ID（Router 经 IdentityMapper 解析后填充） ──
-  internalUserId: string; // 经 IdentityMapper 解析后的统一用户 ID
-  internalChatId: string; // 经 IdentityMapper 解析后的统一聊天 ID
+  // ── 统一内部 ID（Channel 调用 IdentityMapper.resolve 后填充） ──
+  /** 经 IdentityMapper.resolve() 解析后的项目级统一用户 ID */
+  internalUserId: string;
+  /** 经 IdentityMapper 解析后的统一聊天 ID */
+  internalChatId: string;
 
   messageType: "text" | "image" | "audio" | "video" | "file" | "event";
   text?: string;
@@ -103,7 +95,7 @@ export interface NormalizedMessage {
     format?: string;
   };
   raw: unknown;
-  contextToken?: string; // 微信等平台需要
+  contextToken?: string; // 平台特定上下文令牌（如微信 context_token），Router 透传
 }
 
 /** 统一发送结果 */
@@ -114,11 +106,23 @@ export interface SendResult {
   raw?: unknown;
 }
 
-/** 统一发送载荷 */
+/**
+ * 统一发送载荷（出站）
+ *
+ * rawPlatformUserId 由 IdentityMapper.reverse() 或 Router 从 NormalizedMessage 直传。
+ * contextToken 和 metadata 为透传字段——Router 不修改不丢弃。
+ */
 export interface SendPayload {
   channelId: string;
-  internalUserId: string;
-  internalChatId: string;
+
+  /**
+   * 收件人平台 ID。
+   * - 回声场景：Router 从 NormalizedMessage.rawPlatformUserId 直传
+   * - 业务回复：Router 调 IdentityMapper.reverse(internalUserId) 得到
+   */
+  rawPlatformUserId: string;
+  rawPlatformChatId?: string;
+
   messageType: "text" | "image" | "audio" | "video" | "file";
   text?: string;
   media?: {
@@ -127,5 +131,18 @@ export interface SendPayload {
     format?: string;
   };
   replyTo?: string;
-  contextToken?: string; // 微信等平台需要，用于引用回复
+
+  /**
+   * 平台上下文令牌。
+   * Channel Agent 在 normalize 时从原始消息提取，Router 透传。
+   * 如微信的 context_token、飞书的 context 等。
+   */
+  contextToken?: string;
+
+  /**
+   * 透传元数据。
+   * Channel Agent 可在此放置发送所需的额外字段，
+   * Router 不修改不丢弃。
+   */
+  metadata?: Record<string, unknown>;
 }

@@ -1,0 +1,17 @@
+{
+  "durable_objects": {
+    "bindings": [
+      { "name": "WECHAT_BOT_AGENT", "class_name": "WeChatBotAgent" },
+      { "name": "WECHAT_QR_CODE_AGENT", "class_name": "WeChatQRCodeAgent" }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1-wechat",
+      "new_sqlite_classes": ["WeChatBotAgent", "WeChatQRCodeAgent"]
+    }
+  ],
+  "vars": {
+    "ILINK_CHANNEL_VERSION": "2.4.3"
+  }
+}

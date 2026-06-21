@@ -2,13 +2,16 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { Elysia } from "elysia";
 import { CloudflareAdapter } from "elysia/adapter/cloudflare-worker";
 import { routeAgentRequest } from "agents";
-import { env } from "cloudflare:workers";
 import { channelManager } from "./framework/channel-manager";
-import { channels } from "./channel";
+import { router } from "./framework/router";
+import type { NormalizedMessage } from "./framework/types";
 
 // 间接 re-export src/channel/index.ts 中的 Agent/DO 类，供 wrangler DO 发现
 // 已验证（见 references/framework-plan/08-self-binding-test.md）：export * 间接链可被 wrangler 正确识别
 export * from "./channel";
+
+// 框架级 Agent（非 channel 范畴）直接暴露给 wrangler 发现
+export { IdentityMapper } from "./agents/identity-mapper";
 
 // ═══════════════════════════════════════════════════════════════════════
 // Named Entrypoints（自我服务绑定 RPC 端点）
@@ -17,20 +20,22 @@ export * from "./channel";
 // ═══════════════════════════════════════════════════════════════════════
 
 export class RouterEntrypoint extends WorkerEntrypoint {
-  async routeMessage(msg: any): Promise<void> {
+  /**
+   * 接收来自 Agent（如 WeChatBotAgent）投递的标准化消息，
+   * 通过 MessageRouter 处理后，经由 ChannelManager 发送响应。
+   *
+   * @param msg - 已归一化的消息对象（由 Agent 的 normalize 流程填充）
+   */
+  async routeMessage(msg: NormalizedMessage): Promise<void> {
     console.log(`[Router] routeMessage: ${JSON.stringify(msg)}`);
+    await router.handleMessage(msg, this.env as Env);
   }
 
-  async scheduleNotification(
-    convId: string,
-    when: Date,
-    payload: any,
-  ): Promise<void> {
+  async scheduleNotification(convId: string, when: Date, _payload: unknown): Promise<void> {
     console.log(`[Router] 安排通知: ${convId} @ ${when.toISOString()}`);
   }
 
-  async broadcastEvent(channel: string, event: any): Promise<void> {
-    console.log(`[Router] 广播事件: ${channel}`);
+  async broadcastEvent(_channel: string, _event: unknown): Promise<void> {
   }
 }
 
@@ -50,12 +55,10 @@ export class AdminEntrypoint extends WorkerEntrypoint {
 // ═══════════════════════════════════════════════════════════════════════
 
 // 使用 CloudflareAdapter + .compile() 是 Elysia 在 CF Workers 上的必要条件
-const app = new Elysia({ adapter: CloudflareAdapter }).onError(
-  ({ code, error }) => {
-    console.error(`[Elysia] ${code}: ${error}`);
-    return new Response("Internal Error", { status: 500 });
-  },
-);
+const app = new Elysia({ adapter: CloudflareAdapter }).onError(({ code, error }) => {
+  console.error(`[Elysia] ${code}: ${error}`);
+  return new Response("Internal Error", { status: 500 });
+});
 
 // ⚠️ 必须在 .compile() 之前注册所有频道路由！
 //    Elysia 的 AoT 编译（.compile()）会冻结路由表，之后 app.use() 不会生效。

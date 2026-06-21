@@ -11,8 +11,6 @@ export function defineChannel(config: IMChannel): IMChannel {
 }
 
 /** wrangler 字段的类型安全构建辅助 */
-export function defineWrangler(
-  config: ChannelWranglerConfig,
-): ChannelWranglerConfig {
+export function defineWrangler(config: ChannelWranglerConfig): ChannelWranglerConfig {
   return config;
 }

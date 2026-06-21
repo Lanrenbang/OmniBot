@@ -1,0 +1,146 @@
+body {
+  background-color: #131313;
+  color: #e5e2e1;
+  font-family:
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    Oxygen,
+    Ubuntu,
+    Cantarell,
+    "Open Sans",
+    "Helvetica Neue",
+    sans-serif;
+}
+.glass-card {
+  background: rgba(42, 42, 42, 0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.pulse-soft {
+  animation: pulse-soft 2s ease-in-out infinite;
+}
+@keyframes pulse-soft {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 0.8;
+  }
+}
+.scan-line {
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #45e17c, transparent);
+  position: absolute;
+  width: 100%;
+  top: 0;
+  left: 0;
+  animation: scanning 3s linear infinite;
+  z-index: 10;
+}
+.scan-line.scaned {
+  background: linear-gradient(90deg, transparent, #f0e68c, transparent);
+  animation: scanning 2s linear infinite;
+}
+@keyframes scanning {
+  0% {
+    top: 0;
+  }
+  100% {
+    top: 100%;
+  }
+}
+.qr-card-scaned {
+  box-shadow:
+    0 0 20px rgba(69, 225, 124, 0.3),
+    0 0 40px rgba(69, 225, 124, 0.15),
+    0 0 60px rgba(69, 225, 124, 0.05);
+  border-color: rgba(69, 225, 124, 0.5) !important;
+}
+.spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid rgba(255, 255, 255, 0.2);
+  border-top-color: #45e17c;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.countdown-pulse {
+  animation: countdown-pulse 1s ease-in-out infinite;
+}
+@keyframes countdown-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+.countdown {
+  display: block;
+  margin-top: 0.75rem;
+  font-size: 0.875rem;
+  color: #bbcbba;
+  text-align: center;
+}
+.status-badge-wait {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.8);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+.status-badge-scaned {
+  background: rgba(69, 225, 124, 0.15);
+  color: #45e17c;
+  border-color: rgba(69, 225, 124, 0.3);
+}
+.status-badge-expired {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.3);
+}
+.status-badge-success {
+  background: rgba(69, 225, 124, 0.2);
+  color: #45e17c;
+  border-color: rgba(69, 225, 124, 0.4);
+}
+.status-badge-redirect {
+  background: rgba(240, 230, 140, 0.15);
+  color: #f0e68c;
+  border-color: rgba(240, 230, 140, 0.3);
+}
+.status-badge-verify {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+  border-color: rgba(59, 130, 246, 0.3);
+}
+.scaned-glow {
+  animation: scaned-glow-pulse 2s ease-in-out infinite;
+}
+@keyframes scaned-glow-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 20px rgba(69, 225, 124, 0.3),
+      0 0 40px rgba(69, 225, 124, 0.15),
+      0 0 60px rgba(69, 225, 124, 0.05);
+    border-color: rgba(69, 225, 124, 0.5) !important;
+  }
+  50% {
+    box-shadow:
+      0 0 30px rgba(69, 225, 124, 0.5),
+      0 0 60px rgba(69, 225, 124, 0.25),
+      0 0 90px rgba(69, 225, 124, 0.1);
+    border-color: rgba(69, 225, 124, 0.8) !important;
+  }
+}

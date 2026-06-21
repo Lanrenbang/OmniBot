@@ -27,5 +27,42 @@
     { "binding": "ROUTER", "service": "omnibot", "entrypoint": "RouterEntrypoint" },
     { "binding": "ADMIN", "service": "omnibot", "entrypoint": "AdminEntrypoint" }
   ],
-  "assets": { "directory": "./public/", "binding": "ASSETS" }
+  "assets": {
+    "directory": "./public/",
+    "binding": "ASSETS"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "IDENTITY_MAPPER",
+        "class_name": "IdentityMapper"
+      },
+      {
+        "name": "WECHAT_BOT_AGENT",
+        "class_name": "WeChatBotAgent"
+      },
+      {
+        "name": "WECHAT_QR_CODE_AGENT",
+        "class_name": "WeChatQRCodeAgent"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1-identity-mapper",
+      "new_sqlite_classes": [
+        "IdentityMapper"
+      ]
+    },
+    {
+      "tag": "v1-wechat",
+      "new_sqlite_classes": [
+        "WeChatBotAgent",
+        "WeChatQRCodeAgent"
+      ]
+    }
+  ],
+  "vars": {
+    "ILINK_CHANNEL_VERSION": "2.4.3"
+  }
 }

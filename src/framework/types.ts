@@ -2,7 +2,31 @@
  * 框架核心类型定义
  *
  * 遵循开发计划 §3.1 和 §7.2-7.3 定义。
- * IMChannel, NormalizedMessage, SendPayload, ChannelWranglerConfig 等核心类型。
+ * IMChannel, MessagePayload, SendResult, ChannelWranglerConfig 等核心类型。
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * MessagePayload 设计——链路传输的统一消息结构
+ *
+ * 设计原则：
+ *   userId 在链路中经过 IdentityMapper 时会发生值的变化（入站：平台 ID → 全局 UUID；
+ *   出站：全局 UUID → 平台 ID），但除 IdentityMapper 外，各节点无需关心 userId
+ *   的"身份"。chatId 同理——由各 Channel 自行解释其语义（微信 = context_token，
+ *   飞书 = chat_id）。
+ *
+ * 各字段职责：
+ *   channelId — 路由目标
+ *   userId    — 链路各节点统一的用户标识（IdentityMapper 在入/出站时改写此值）
+ *   chatId    — 回复寻址令牌（微信 = context_token，飞书 = chat_id；主动消息时可为空）
+ *   replyTo   — 引用消息（被回复消息的相关信息，Channel 可据此构造 ref_msg）
+ *   metadata  — 平台特定参数的兜底容器（Router 透传，不修改不丢弃）
+ *
+ * 与旧方案的差异（NormalizedMessage + SendPayload → MessagePayload）：
+ *   - userId 替代 rawPlatformUserId + internalUserId 的二元结构
+ *   - chatId 替代 rawPlatformChatId + internalChatId + contextToken
+ *   - replyTo 从字符串变为对象（支持媒体引用等信息）
+ *   - 无 raw 字段（去重由各 Channel 自行管理）
+ *   - 无 messageId 顶层字段
+ * ═══════════════════════════════════════════════════════════════════════════
  */
 
 import type { Elysia } from "elysia";
@@ -62,40 +86,66 @@ export interface IMChannel {
   /**
    * 统一发送消息接口
    * 各 channel 实现自己的发送逻辑
-   * @param msg.rawPlatformUserId - 收件人平台 ID（由 IdentityMapper.reverse 或 Router 提供）
+   *
+   * @param msg - MessagePayload 实例。userId 应为平台用户 ID（已由 Router 或
+   *   IdentityMapper.reverse 在出站前还原）。chatId 承载回复会话令牌。
    */
-  sendMessage(env: Env, msg: SendPayload): Promise<SendResult>;
+  sendMessage(env: Env, msg: MessagePayload): Promise<SendResult>;
 }
 
-/** 标准化消息格式（入站） */
-export interface NormalizedMessage {
+// ═══════════════════════════════════════════════════════════════════════════
+// MessagePayload —— 链路传输的统一消息结构
+//
+// 设计原则：
+//   userId 在链路中经过 IdentityMapper 时会发生值的变化（入站：平台 ID → 全局 UUID；
+//   出站：全局 UUID → 平台 ID），但除 IdentityMapper 外，各节点无需关心 userId
+//   的"身份"。chatId 同理——由各 Channel 自行解释其语义（微信 = context_token，
+//   飞书 = chat_id）。
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** 入/出站统一消息结构。用于 Channel <-> Router <-> Business 之间的全链路传输。 */
+export interface MessagePayload {
   channelId: string;
-  messageId: string;
 
-  // ── 平台原始 ID（Channel normalize 时填充） ──
   /**
-   * 平台原始用户 ID（如微信 wxid、飞书 open_id/user_id）
-   * Channel 的 normalize() 必须填充此字段
+   * 用户标识。
+   * 入站：Channel 填入平台 UserID（如 wxid_xxx）→ IdentityMapper.resolve() 后变为全局 UUID
+   * 出站：业务填入全局 UUID → Router 调 IdentityMapper.reverse() 后变为平台 UserID
+   * 除 IdentityMapper 外，各节点无需关心 userId 的"身份"。
    */
-  rawPlatformUserId: string;
-  /** 平台原始聊天/群组 ID（单聊时与 rawPlatformUserId 相同） */
-  rawPlatformChatId?: string;
+  userId: string;
 
-  // ── 统一内部 ID（Channel 调用 IdentityMapper.resolve 后填充） ──
-  /** 经 IdentityMapper.resolve() 解析后的项目级统一用户 ID */
-  internalUserId: string;
-  /** 经 IdentityMapper 解析后的统一聊天 ID */
-  internalChatId: string;
+  /**
+   * 对话标识。用于出站时的回复寻址/会话令牌。
+   * 微信 = context_token，飞书 = chat_id，由各 Channel 自行解释。
+   * 主动消息（无 prior 入站消息）时可能为空字符串。
+   */
+  chatId: string;
 
   messageType: "text" | "image" | "audio" | "video" | "file" | "event";
   text?: string;
   media?: {
-    url?: string;
-    encrypted?: boolean;
+    url: string;
     format?: string;
+    headers?: Record<string, string>;
   };
-  raw: unknown;
-  contextToken?: string; // 平台特定上下文令牌（如微信 context_token），Router 透传
+
+  /** 引用消息 */
+  replyTo?: {
+    chatId?: string;                          // 被引用消息的对话 ID（部分平台用）
+    text?: string;
+    media?: {
+      url: string;
+      format?: string;
+      headers?: Record<string, string>;
+    };
+  };
+
+  /**
+   * 平台特定参数（Router 透传，不修改不丢弃）。
+   * 如 WeChat 的 messageState、CDN 上传参数等。
+   */
+  metadata?: Record<string, unknown>;
 }
 
 /** 统一发送结果 */
@@ -104,45 +154,4 @@ export interface SendResult {
   platformMessageId?: string;
   platformError?: string;
   raw?: unknown;
-}
-
-/**
- * 统一发送载荷（出站）
- *
- * rawPlatformUserId 由 IdentityMapper.reverse() 或 Router 从 NormalizedMessage 直传。
- * contextToken 和 metadata 为透传字段——Router 不修改不丢弃。
- */
-export interface SendPayload {
-  channelId: string;
-
-  /**
-   * 收件人平台 ID。
-   * - 回声场景：Router 从 NormalizedMessage.rawPlatformUserId 直传
-   * - 业务回复：Router 调 IdentityMapper.reverse(internalUserId) 得到
-   */
-  rawPlatformUserId: string;
-  rawPlatformChatId?: string;
-
-  messageType: "text" | "image" | "audio" | "video" | "file";
-  text?: string;
-  media?: {
-    data?: ArrayBuffer;
-    url?: string;
-    format?: string;
-  };
-  replyTo?: string;
-
-  /**
-   * 平台上下文令牌。
-   * Channel Agent 在 normalize 时从原始消息提取，Router 透传。
-   * 如微信的 context_token、飞书的 context 等。
-   */
-  contextToken?: string;
-
-  /**
-   * 透传元数据。
-   * Channel Agent 可在此放置发送所需的额外字段，
-   * Router 不修改不丢弃。
-   */
-  metadata?: Record<string, unknown>;
 }

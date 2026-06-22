@@ -29,13 +29,14 @@ export class WeChatBotAgent extends Agent<Env> {
       processed_at INTEGER NOT NULL
     )`;
 
-    // context_tokens: 存储每个账号与用户的会话上下文。
-    // user_id = msg.from_user_id（收消息时的发送者，发消息时的收件人）。
-    // IdentityMapper 只做 ID 替换，context_token 由 Agent 自行管理。
-    this.sql`CREATE TABLE IF NOT EXISTS context_tokens (
+    // user_channels: 存储 (bot_id, user_id) → 凭证映射。
+    // 用于 sendMessage 时查找与用户关联的 Bot 账号凭证。
+    // chatId（即 iLink context_token）由业务侧在 MessagePayload 中传递，
+    // Agent 不再持久化此值——Agent 是纯被动的，只能由业务侧触发 sendMessage，
+    // 每次调用都会携带 chatId。
+    this.sql`CREATE TABLE IF NOT EXISTS user_channels (
       bot_id TEXT NOT NULL,
       user_id TEXT NOT NULL,
-      context_token TEXT NOT NULL,
       bot_token TEXT NOT NULL,
       base_url TEXT NOT NULL,
       wechat_uin TEXT NOT NULL,
@@ -154,8 +155,8 @@ export class WeChatBotAgent extends Agent<Env> {
           `[BotAgent] 账号已失效(ret=${data.ret}, errcode=${data.errcode})，停止轮询: bot=${account.ilink_bot_id}`
         );
         this.sql`UPDATE accounts SET last_active_at = 0 WHERE ilink_bot_id = ${account.ilink_bot_id}`;
-        // 清理该账号关联的会话上下文，避免垃圾数据残留
-        this.sql`DELETE FROM context_tokens WHERE bot_id = ${account.ilink_bot_id}`;
+        // 清理该账号关联的用户通道记录，避免垃圾数据残留
+        this.sql`DELETE FROM user_channels WHERE bot_id = ${account.ilink_bot_id}`;
         return;
       }
 
@@ -201,43 +202,25 @@ export class WeChatBotAgent extends Agent<Env> {
           continue;
         }
 
-        // 存储 context_token（Agent 内部管理，IdentityMapper 不关心）
-        if (msg.context_token) {
-          this.sql`INSERT OR REPLACE INTO context_tokens
-            (bot_id, user_id, context_token, bot_token, base_url, wechat_uin, updated_at)
-            VALUES (${account.ilink_bot_id}, ${msg.from_user_id}, ${msg.context_token},
-                    ${account.bot_token}, ${account.base_url}, ${account.wechat_uin}, ${Date.now()})`;
-        }
+        // 持久化 (user_id → 凭证) 映射，供后续 sendMessage 查找 Bot 账号凭证。
+        // 不存 context_token——它由业务侧在 MessagePayload.chatId 中传递。
+        this.sql`INSERT OR REPLACE INTO user_channels
+          (bot_id, user_id, bot_token, base_url, wechat_uin, updated_at)
+          VALUES (${account.ilink_bot_id}, ${msg.from_user_id},
+                  ${account.bot_token}, ${account.base_url}, ${account.wechat_uin}, ${Date.now()})`;
 
-        // 调用 IdentityMapper.resolve() 将 rawPlatformUserId 替换为 internalUserId
-        let internalUserId = "";
-        try {
-          const mapper = this.env.IDENTITY_MAPPER;
-          if (mapper) {
-            const stub = await getAgentByName(mapper, "default");
-            internalUserId = await stub.resolve({
-              platform: "wechat",
-              platformUserId: msg.from_user_id
-            });
-          }
-        } catch (err) {
-          console.error(`[BotAgent] IdentityMapper.resolve 失败: ${err}`);
-        }
-
-        const normalized = {
+        // 使用 MessagePayload 统一结构投递
+        // userId 先填平台 ID（msg.from_user_id），后续由 Router 或 IdentityMapper
+        // 在入站路径上改写为全局 UUID。chatId 承载 WeChat 的 context_token。
+        const payload: import("../../framework/types").MessagePayload = {
           channelId: "wechat",
-          messageId: msg.msg_id ?? crypto.randomUUID(),
-          rawPlatformUserId: msg.from_user_id,
-          rawPlatformChatId: msg.from_user_id,
-          internalUserId,
-          internalChatId: "",
+          userId: msg.from_user_id,
+          chatId: msg.context_token ?? "",
           messageType,
-          text: this.extractText(msg),
-          raw: msg,
-          contextToken: msg.context_token
+          text: this.extractText(msg)
         };
-        console.log(`[BotAgent] 转发消息至 Router: from=${msg.from_user_id}, text=${normalized.text?.slice(0, 50)}`);
-        await this.env.ROUTER.routeMessage(normalized);
+        console.log(`[BotAgent] 转发消息至 Router: from=${msg.from_user_id}, text=${payload.text?.slice(0, 50)}`);
+        await this.env.ROUTER.routeMessage(payload);
       }
     } catch (err) {
       console.error(`[BotAgent] startPolling 异常: ${err}`);
@@ -255,45 +238,56 @@ export class WeChatBotAgent extends Agent<Env> {
   }
 
   /**
-   * 发送文本消息给指定用户
+   * 根据统一 MessagePayload 发送消息
    *
-   * payload.rawPlatformUserId: 收件人平台 ID（Router 从 NormalizedMessage 直传或
-   *   IdentityMapper.reverse 产出）。Agent 通过此值在 context_tokens 表中查找
-   *   对应的账号凭证和 context_token。
+   * payload.userId 此时已被 Router 还原为平台 ilink_user_id（回声场景直传，
+   * 业务回复场景经 IdentityMapper.reverse 还原）。
+   * payload.chatId 承载 WeChat 的 context_token（被动回复时来自入站消息，
+   * 主动消息时可能为空字符串，此时 Agent 不再 fallback 查表）。
    *
-   * 多账号场景：context_tokens 表的 (bot_id, user_id) 复合主键可区分同一用户在
-   *   不同 Bot 账号下的会话。查询按 updated_at DESC 取最近一个。
+   * Agent 通过 payload.userId 在 user_channels 表中查找对应的 Bot 账号凭证。
+   * 注意：context_token 不再从 user_channels 表读取——它由业务侧在
+   * MessagePayload.chatId 中传递。Agent 是纯被动的，只能由业务侧触发
+   * sendMessage，每次调用都会携带 chatId。
    */
   @callable()
-  async sendMessage(payload: { rawPlatformUserId: string; text: string; contextToken?: string }) {
-    const [ctx] = this.sql<{
+  async sendMessage(payload: import("../../framework/types").MessagePayload) {
+    // 查找与用户关联的 Bot 账号凭证
+    const [channel] = this.sql<{
       bot_token: string;
       base_url: string;
       wechat_uin: string;
-      context_token: string;
     }>`
-      SELECT bot_token, base_url, wechat_uin, context_token
-      FROM context_tokens
-      WHERE user_id = ${payload.rawPlatformUserId}
+      SELECT bot_token, base_url, wechat_uin
+      FROM user_channels
+      WHERE user_id = ${payload.userId}
       ORDER BY updated_at DESC
       LIMIT 1
     `;
 
-    if (!ctx) throw new Error("未找到与该用户的会话信息（无 context_token）");
+    if (!channel) throw new Error(`未找到与用户 ${payload.userId} 关联的 Bot 账号`);
 
-    const contextToken = payload.contextToken ?? ctx.context_token;
+    // chatId 承载 WeChat context_token（入站时从 msg.context_token 获取，
+    // 出站时由业务侧传递，Agent 不再 fallback）
+    const contextToken = payload.chatId || undefined;
 
-    return fetch(`${ctx.base_url}/ilink/bot/sendmessage`, {
+    // 构建 item_list（支持文本和后续媒体）
+    const itemList: { type: number; text_item?: { text: string } }[] = [];
+    if (payload.text) {
+      itemList.push({ type: 1, text_item: { text: payload.text } });
+    }
+
+    return fetch(`${channel.base_url}/ilink/bot/sendmessage`, {
       method: "POST",
-      headers: authHeaders(ctx.bot_token, ctx.wechat_uin),
+      headers: authHeaders(channel.bot_token, channel.wechat_uin),
       body: JSON.stringify({
         msg: {
-          to_user_id: payload.rawPlatformUserId,
+          to_user_id: payload.userId,
           client_id: crypto.randomUUID(),
           message_type: MessageType.BOT,
-          message_state: 2,
+          message_state: (payload.metadata?.messageState as number) ?? 2,
           context_token: contextToken,
-          item_list: [{ type: 1, text_item: { text: payload.text } }]
+          item_list: itemList
         },
         base_info: buildBaseInfo()
       })

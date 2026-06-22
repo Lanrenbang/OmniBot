@@ -8,7 +8,7 @@
  */
 
 import { Elysia } from "elysia";
-import type { IMChannel, SendPayload, SendResult } from "./types";
+import type { IMChannel, MessagePayload, SendResult } from "./types";
 
 import { channels as channelList } from "../channel";
 
@@ -63,7 +63,7 @@ export class ChannelManager {
   }
 
   /** 统一发送消息 */
-  async send(env: Env, payload: SendPayload): Promise<SendResult> {
+  async send(env: Env, payload: MessagePayload): Promise<SendResult> {
     const channel = this.channels.get(payload.channelId);
     if (!channel) throw new Error(`未知 channel: ${payload.channelId}`);
     return channel.sendMessage(env, payload);

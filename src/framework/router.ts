@@ -3,22 +3,22 @@
  *
  * ═══════════════════════════════════════════════════════════════════════════
  * P5: 所有文本消息由 Router 回声。
- *   Channel Agent 在投递前已调用 IdentityMapper.resolve() 填充 internalUserId。
- *   Router 回声时以 NormalizedMessage.rawPlatformUserId 作为收件人 ID。
+ *   Channel Agent 在投递前已将 MessagePayload.userId 设为平台 ID。
+ *   Router 回声时不经过 IdentityMapper——直接将原 userId 和 chatId 返回。
  *
  * 后期计划（做好 WIP 标记，暂不实现）：
  *   1. 斜杠命令匹配与路由（如 /help, /check 等 → 对应 Business Agent）
  *   2. Business Agent 对接（收到 Business 响应后 call IdentityMapper.reverse）
- *   3. 异步回复场景：Business 只知 internalUserId → Router 调 reverse 拿 rawPlatformUserId
+ *   3. 异步回复场景：Business 只知全局 UUID → Router 调 reverse 拿平台 ID
  * ═══════════════════════════════════════════════════════════════════════════
  */
 
-import type { NormalizedMessage, SendPayload } from "./types";
+import type { MessagePayload } from "./types";
 import { channelManager } from "./channel-manager";
 
 export interface RouteHandler {
   patterns: string[];
-  handle(msg: NormalizedMessage): Promise<SendPayload | null>;
+  handle(msg: MessagePayload): Promise<MessagePayload | null>;
   priority: number;
 }
 
@@ -31,12 +31,12 @@ class MessageRouter {
   }
 
   /**
-   * 处理归一化后的消息
+   * 处理统一消息
    *
-   * 此时 msg.internalUserId 已由 Channel Agent 调用 IdentityMapper.resolve() 填充。
-   * Router 回声时直传 rawPlatformUserId 到 SendPayload。
+   * 此时 msg.userId 为平台 UserID（Channel Agent 已填充，尚未经 IdentityMapper）。
+   * Router 回声时直接回传原 userId 和 chatId。
    */
-  async handleMessage(msg: NormalizedMessage, env: Env): Promise<void> {
+  async handleMessage(msg: MessagePayload, env: Env): Promise<void> {
     if (msg.messageType !== "text") {
       console.log(`[Router] 跳过非文本消息: ${msg.messageType}`);
       return;
@@ -66,13 +66,13 @@ class MessageRouter {
     //   const stub = businessAgent.getByName("default");
     //   const response = await stub.processMessage(msg);
     //   if (response) {
-    //     // 业务回复用 internalUserId → IdentityMapper.reverse → rawPlatformUserId
+    //     // 业务回复用 userId → IdentityMapper.reverse → platformUserId
     //     // const mapper = env.IDENTITY_MAPPER.getByName("default");
-    //     // const { platformUserId } = await mapper.reverse(response.internalUserId);
+    //     // const { platformUserId } = await mapper.reverse(response.userId);
     //     await channelManager.send(env, {
     //       channelId: msg.channelId,
-    //       rawPlatformUserId,    // from mapper.reverse
-    //       contextToken: msg.contextToken,
+    //       userId: platformUserId,    // from mapper.reverse
+    //       chatId: msg.chatId,
     //       ...response,
     //     });
     //     return;
@@ -80,14 +80,13 @@ class MessageRouter {
     // }
 
     // ─── P5 回声 ────────────────────────────────────────────────
-    // rawPlatformUserId 从 NormalizedMessage 直传，无需调 IdentityMapper.reverse
+    // 直接回传原 userId 和 chatId（回声场景不经过 IdentityMapper）
     await channelManager.send(env, {
       channelId: msg.channelId,
-      rawPlatformUserId: msg.rawPlatformUserId,
-      rawPlatformChatId: msg.rawPlatformChatId,
+      userId: msg.userId,
+      chatId: msg.chatId,
       messageType: "text",
-      text: text,
-      contextToken: msg.contextToken
+      text: text
     });
   }
 }

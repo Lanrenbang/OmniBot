@@ -44,13 +44,45 @@ export const MessageItemType = {
   VIDEO: 5
 } as const;
 
-/** UploadMediaType: 上传媒体类型枚举，与 MessageItemType 一致 */
+/**
+ * 媒体类型枚举，对应 CDN 上传/下载时的 media_type。
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * 以下为每种媒体在【不下载 CDN 内容】的情况下，可直接从 API 响应中获取的信息：
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * IMAGE(1):
+ *   - media.encrypt_query_param / media.full_url（CDN 下载链接）
+ *   - media.aes_key（AES 解密密钥, base64）/ image_item.aeskey（hex 编码, 优先用于解密）
+ *   - thumb_media（缩略图 CDN 引用）
+ *   - mid_size, hd_size（密文大小）, thumb_size, thumb_height, thumb_width
+ *   必须下载 CDN 才能获得：实际像素内容。
+ *
+ * VIDEO(2):
+ *   - media.encrypt_query_param / media.full_url（CDN 下载链接）
+ *   - media.aes_key（AES 解密密钥）
+ *   - video_size（密文大小）, play_length（播放时长 ms）, video_md5
+ *   - thumb_media（缩略图 CDN 引用）, thumb_size, thumb_height, thumb_width
+ *   必须下载 CDN 才能获得：实际视频内容。
+ *
+ * FILE(3):
+ *   - media.encrypt_query_param / media.full_url（CDN 下载链接）
+ *   - media.aes_key（AES 解密密钥）
+ *   - file_name（文件名）, md5（明文 MD5）, len（文件大小）
+ *   必须下载 CDN 才能获得：实际文件内容。
+ *
+ * VOICE(4):
+ *   - media.encrypt_query_param / media.full_url（CDN 下载链接）
+ *   - media.aes_key（AES 解密密钥）
+ *   - text（语音转文字结果 —— ⚠️ 无需下载即随消息送达，见 VoiceItem.text）
+ *   - encode_type（编码类型）, sample_rate（采样率）, playtime（时长 ms）
+ *   必须下载 CDN 才能获得：原始 SILK 音频数据（如需分析音质、音色、语调等）。
+ */
 export const UploadMediaType = {
-  TEXT: 1,
-  IMAGE: 2,
-  VOICE: 3,
-  FILE: 4,
-  VIDEO: 5
+  IMAGE: 1,
+  VIDEO: 2,
+  FILE: 3,
+  VOICE: 4,
 } as const;
 
 // ─── 媒体消息类型 ──────────────────────────────────────────────────────

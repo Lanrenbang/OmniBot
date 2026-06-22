@@ -4,7 +4,7 @@
  * 身份映射系统——仅做 ID 替换。
  *
  * 职责边界：
- *   Inbound:  Channel Agent → resolve(platform, platformUserId) → internalUserId
+ *   Inbound:  Channel Agent → resolve(platform, platformUserId) → 全局 UUID
  *   Outbound: Router → reverse(internalId) → { platform, platformUserId }
  *
  * IdentityMapper 不负责与身份 ID 无关的任何事情。

@@ -4,7 +4,7 @@ import { CloudflareAdapter } from "elysia/adapter/cloudflare-worker";
 import { routeAgentRequest } from "agents";
 import { channelManager } from "./framework/channel-manager";
 import { router } from "./framework/router";
-import type { NormalizedMessage } from "./framework/types";
+import type { MessagePayload } from "./framework/types";
 
 // 间接 re-export src/channel/index.ts 中的 Agent/DO 类，供 wrangler DO 发现
 // 已验证（见 references/framework-plan/08-self-binding-test.md）：export * 间接链可被 wrangler 正确识别
@@ -21,12 +21,12 @@ export { IdentityMapper } from "./agents/identity-mapper";
 
 export class RouterEntrypoint extends WorkerEntrypoint {
   /**
-   * 接收来自 Agent（如 WeChatBotAgent）投递的标准化消息，
+   * 接收来自 Agent（如 WeChatBotAgent）投递的统一消息，
    * 通过 MessageRouter 处理后，经由 ChannelManager 发送响应。
    *
-   * @param msg - 已归一化的消息对象（由 Agent 的 normalize 流程填充）
+   * @param msg - MessagePayload 实例（Agent 的 normalize 流程已填充 userId/chatId）
    */
-  async routeMessage(msg: NormalizedMessage): Promise<void> {
+  async routeMessage(msg: MessagePayload): Promise<void> {
     console.log(`[Router] routeMessage: ${JSON.stringify(msg)}`);
     await router.handleMessage(msg, this.env as Env);
   }

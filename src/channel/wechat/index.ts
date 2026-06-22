@@ -55,14 +55,12 @@ export default defineChannel({
   },
 
   async sendMessage(env, msg) {
-    // rawPlatformUserId 来自 Router（从 NormalizedMessage 直传或 IdentityMapper.reverse 产出）
-    // WeChatBotAgent 内部通过 rawPlatformUserId 查 context_tokens 表获取账号凭证和 context_token
+    // msg 是已由 Router 构建好的 MessagePayload 实例。
+    // msg.userId 为平台用户 ID（Router 已处理 IdentityMapper.reverse 或直传）。
+    // msg.chatId 承载 WeChat context_token。
+    // WeChatBotAgent 内部通过 msg.userId 在 user_channels 表查找 Bot 账号凭证。
     const stub = await getAgentByName(env.WECHAT_BOT_AGENT, "default");
-    const response = await stub.sendMessage({
-      rawPlatformUserId: msg.rawPlatformUserId,
-      text: msg.text,
-      contextToken: msg.contextToken
-    });
+    const response = await stub.sendMessage(msg);
     return { success: response.ok, raw: response };
   }
 });
